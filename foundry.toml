@@ -1,0 +1,50 @@
+[profile.default]
+src = "src"
+out = "out"
+libs = ["lib"]
+auto_detect_solc = true
+optimizer = true
+optimizer_runs = 1_000_000
+evm_version = "paris"
+via_ir = true
+fs_permissions = [{ access = "read", path = "./" }]
+
+# RPCs nomeados (usados por forge script e cast)
+[rpc_endpoints]
+base-sepolia = "${RPC_BASE_SEPOLIA}"
+base         = "${RPC_BASE}"
+
+[fmt]
+line_length = 100
+tab_width = 4
+bracket_spacing = true
+int_types = "short"
+quote_style = "double"
+number_underscore = "thousands"
+
+# Perfis extras (ex.: CI mais estrito)
+[profile.ci]
+optimizer_runs = 20_000
+via_ir = true
+
+# Remappings necessários
+remappings = [
+  "forge-std/=lib/forge-std/src/",
+  "@openzeppelin/=lib/openzeppelin-contracts/",
+  "@uniswap/v3-core/=lib/v3-core/",
+  "@uniswap/v3-periphery/=lib/v3-periphery/",
+  "@uniswap/v2-core/=lib/v2-core/",
+  "@uniswap/lib/=lib/uniswap-lib/",
+  "swap-router-contracts/=lib/swap-router-contracts/",
+  "base64-sol/=lib/base64-sol/"
+]
+
+# Para evitar compilar testes das libs
+ignored_paths = [
+  "lib/**/test",
+  "lib/**/tests",
+  "lib/**/certora",
+  "lib/**/examples",
+  "lib/**/script",
+  "lib/**/scripts"
+]
