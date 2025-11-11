@@ -4,7 +4,7 @@ pragma solidity ^0.8.24;
 import {IERC20} from "openzeppelin-contracts/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "openzeppelin-contracts/contracts/token/ERC20/utils/SafeERC20.sol";
 import {Ownable} from "openzeppelin-contracts/contracts/access/Ownable.sol";
-import { ReentrancyGuard } from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
+import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import "../interfaces/IConcentratedLiquidityAdapter.sol";
 import {ISwapRouterV3Minimal} from "../interfaces/ISwapRouterV3Minimal.sol";
 import {IAeroRouter} from "../interfaces/IAeroRouter.sol";
@@ -23,14 +23,25 @@ contract SingleUserVaultV2 is Ownable, ReentrancyGuard {
     uint256 public positionTokenId;
 
     event PoolAdapterSet(address adapter);
-    event PositionOpened(uint256 tokenId, int24 lower, int24 upper, uint128 liq);
+    event PositionOpened(
+        uint256 tokenId,
+        int24 lower,
+        int24 upper,
+        uint128 liq
+    );
     event Rebalanced(int24 lower, int24 upper, uint128 newLiq);
     event Exited();
     event Collected(uint256 amount0, uint256 amount1);
     event Staked();
     event Unstaked();
-    event Swapped(address indexed router, address indexed tokenIn, address indexed tokenOut, uint256 amountIn, uint256 amountOut);
-    
+    event Swapped(
+        address indexed router,
+        address indexed tokenIn,
+        address indexed tokenOut,
+        uint256 amountIn,
+        uint256 amountOut
+    );
+
     /// @dev OZ v5 Ownable requires the base constructor argument.
     /// Pass the initial owner at deployment time.
     constructor(address _owner) Ownable(_owner) {
@@ -57,7 +68,11 @@ contract SingleUserVaultV2 is Ownable, ReentrancyGuard {
     }
 
     // ---- internal helper ----
-    function _approveIfNeeded(address token, address spender, uint256 needed) internal {
+    function _approveIfNeeded(
+        address token,
+        address spender,
+        uint256 needed
+    ) internal {
         if (needed == 0) return;
         uint256 allowance = IERC20(token).allowance(address(this), spender);
         if (allowance < needed) {
@@ -66,29 +81,43 @@ contract SingleUserVaultV2 is Ownable, ReentrancyGuard {
         }
     }
 
-    /// ===== Mutations =====
-
-    function openInitialPosition(int24 lower, int24 upper) external onlyOwner nonReentrant {
+    function _openWithAllIdle(
+        int24 lower,
+        int24 upper
+    ) internal returns (uint256 tid, uint128 L) {
         require(poolSet, "no pool");
 
         (address token0, address token1) = adapter.tokens();
         address spender = address(adapter);
+
         uint256 bal0 = IERC20(token0).balanceOf(address(this));
         uint256 bal1 = IERC20(token1).balanceOf(address(this));
-        
+        require(bal0 > 0 || bal1 > 0, "no funds");
+
         _approveIfNeeded(token0, spender, bal0);
         _approveIfNeeded(token1, spender, bal1);
 
-        (uint256 tid, uint128 L) = adapter.openInitialPosition(address(this), lower, upper);
+        (tid, L) = adapter.openInitialPosition(address(this), lower, upper);
         positionTokenId = tid;
+
         emit PositionOpened(tid, lower, upper, L);
     }
 
-    function rebalanceWithCaps(int24 lower, int24 upper, uint256 cap0, uint256 cap1)
-        external
-        onlyOwner
-        nonReentrant
-    {
+    /// ===== Mutations =====
+
+    function openInitialPosition(
+        int24 lower,
+        int24 upper
+    ) external onlyOwner nonReentrant {
+        _openWithAllIdle(lower, upper);
+    }
+
+    function rebalanceWithCaps(
+        int24 lower,
+        int24 upper,
+        uint256 cap0,
+        uint256 cap1
+    ) external onlyOwner nonReentrant {
         require(poolSet, "no pool");
 
         // Pre-approve adapter to pull up to the caps (or current balances if caps are 0)
@@ -98,11 +127,17 @@ contract SingleUserVaultV2 is Ownable, ReentrancyGuard {
         uint256 bal1 = IERC20(token1).balanceOf(address(this));
         uint256 need0 = (cap0 == 0) ? bal0 : (cap0 < bal0 ? cap0 : bal0);
         uint256 need1 = (cap1 == 0) ? bal1 : (cap1 < bal1 ? cap1 : bal1);
-        
+
         _approveIfNeeded(token0, spender, need0);
         _approveIfNeeded(token1, spender, need1);
 
-        uint128 L = adapter.rebalanceWithCaps(address(this), lower, upper, cap0, cap1);
+        uint128 L = adapter.rebalanceWithCaps(
+            address(this),
+            lower,
+            upper,
+            cap0,
+            cap1
+        );
         positionTokenId = adapter.currentTokenId(address(this));
         emit Rebalanced(lower, upper, L);
     }
@@ -117,7 +152,9 @@ contract SingleUserVaultV2 is Ownable, ReentrancyGuard {
      * @notice Close position (if any), move all funds to the vault, then transfer all vault balances to `to`.
      * @param to Recipient EOA/contract that will receive both tokens.
      */
-    function exitPositionAndWithdrawAll(address to) external onlyOwner nonReentrant {
+    function exitPositionAndWithdrawAll(
+        address to
+    ) external onlyOwner nonReentrant {
         require(to != address(0), "zero to");
 
         // 1) Close position and move funds to the vault
@@ -140,7 +177,12 @@ contract SingleUserVaultV2 is Ownable, ReentrancyGuard {
         emit Exited();
     }
 
-    function collectToVault() external onlyOwner nonReentrant returns (uint256 a0, uint256 a1) {
+    function collectToVault()
+        external
+        onlyOwner
+        nonReentrant
+        returns (uint256 a0, uint256 a1)
+    {
         (a0, a1) = adapter.collectToVault(address(this));
         emit Collected(a0, a1);
     }
@@ -160,7 +202,7 @@ contract SingleUserVaultV2 is Ownable, ReentrancyGuard {
         address router,
         address tokenIn,
         address tokenOut,
-        uint24  fee,
+        uint24 fee,
         uint256 amountIn,
         uint256 amountOutMinimum,
         uint160 sqrtPriceLimitX96
@@ -170,16 +212,16 @@ contract SingleUserVaultV2 is Ownable, ReentrancyGuard {
         // approve router to pull tokenIn from this vault
         _approveIfNeeded(tokenIn, router, amountIn);
 
-        ISwapRouterV3Minimal.ExactInputSingleParams memory p =
-        ISwapRouterV3Minimal.ExactInputSingleParams({
-            tokenIn: tokenIn,
-            tokenOut: tokenOut,
-            fee: fee,
-            recipient: address(this),
-            amountIn: amountIn,
-            amountOutMinimum: amountOutMinimum,
-            sqrtPriceLimitX96: sqrtPriceLimitX96
-        });
+        ISwapRouterV3Minimal.ExactInputSingleParams
+            memory p = ISwapRouterV3Minimal.ExactInputSingleParams({
+                tokenIn: tokenIn,
+                tokenOut: tokenOut,
+                fee: fee,
+                recipient: address(this),
+                amountIn: amountIn,
+                amountOutMinimum: amountOutMinimum,
+                sqrtPriceLimitX96: sqrtPriceLimitX96
+            });
 
         amountOut = ISwapRouterV3Minimal(router).exactInputSingle(p);
 
@@ -189,12 +231,11 @@ contract SingleUserVaultV2 is Ownable, ReentrancyGuard {
         emit Swapped(router, tokenIn, tokenOut, amountIn, amountOut);
     }
 
-
     function swapExactInAero(
         address router,
         address tokenIn,
         address tokenOut,
-        int24  tickSpacing,
+        int24 tickSpacing,
         uint256 amountIn,
         uint256 amountOutMinimum,
         uint160 sqrtPriceLimitX96
@@ -204,16 +245,17 @@ contract SingleUserVaultV2 is Ownable, ReentrancyGuard {
 
         _approveIfNeeded(tokenIn, router, amountIn);
 
-        IAeroRouter.ExactInputSingleParams memory p = IAeroRouter.ExactInputSingleParams({
-            tokenIn: tokenIn,
-            tokenOut: tokenOut,
-            tickSpacing: tickSpacing,
-            recipient: address(this),
-            deadline: block.timestamp + 900,
-            amountIn: amountIn,
-            amountOutMinimum: amountOutMinimum,
-            sqrtPriceLimitX96: sqrtPriceLimitX96
-        });
+        IAeroRouter.ExactInputSingleParams memory p = IAeroRouter
+            .ExactInputSingleParams({
+                tokenIn: tokenIn,
+                tokenOut: tokenOut,
+                tickSpacing: tickSpacing,
+                recipient: address(this),
+                deadline: block.timestamp + 900,
+                amountIn: amountIn,
+                amountOutMinimum: amountOutMinimum,
+                sqrtPriceLimitX96: sqrtPriceLimitX96
+            });
 
         amountOut = IAeroRouter(router).exactInputSingle{value: 0}(p);
 
@@ -225,7 +267,7 @@ contract SingleUserVaultV2 is Ownable, ReentrancyGuard {
         address router,
         address tokenIn,
         address tokenOut,
-        uint24  fee,
+        uint24 fee,
         uint256 amountIn,
         uint256 amountOutMinimum,
         uint160 sqrtPriceLimitX96
@@ -235,8 +277,8 @@ contract SingleUserVaultV2 is Ownable, ReentrancyGuard {
 
         _approveIfNeeded(tokenIn, router, amountIn);
 
-        ISwapRouterV3Pancake.ExactInputSingleParams memory p =
-            ISwapRouterV3Pancake.ExactInputSingleParams({
+        ISwapRouterV3Pancake.ExactInputSingleParams
+            memory p = ISwapRouterV3Pancake.ExactInputSingleParams({
                 tokenIn: tokenIn,
                 tokenOut: tokenOut,
                 fee: fee,
@@ -251,6 +293,76 @@ contract SingleUserVaultV2 is Ownable, ReentrancyGuard {
 
         IERC20(tokenIn).forceApprove(router, 0);
         emit Swapped(router, tokenIn, tokenOut, amountIn, amountOut);
+    }
+
+    function unstakeExitSwapAndOpenPancake(
+        address router,
+        address tokenIn,
+        address tokenOut,
+        uint24 fee,
+        uint256 amountIn,
+        uint256 amountOutMinimum,
+        uint160 sqrtPriceLimitX96,
+        int24 newLower,
+        int24 newUpper
+    )
+        external
+        onlyOwner
+        nonReentrant
+        returns (uint256 amountOut, uint256 newTokenId, uint128 newLiq)
+    {
+        require(poolSet, "no pool");
+        require(router != address(0), "router=0");
+
+        // 1) best-effort: unstake se tiver gauge configurado
+        // (adapter.ustakePosition(vault) é parte do IConcentratedLiquidityAdapter)
+        try adapter.unstakePosition(address(this)) {
+            emit Unstaked();
+        } catch {
+            // se não tiver gauge ou já estiver desstaked, ignoramos
+        }
+
+        // 2) sair da posição atual para o vault (tokens voltam para o vault)
+        adapter.exitPositionToVault(address(this));
+        positionTokenId = adapter.currentTokenId(address(this)); // esperado 0
+        emit Exited();
+
+        // 3) swap no Pancake router, se amountIn > 0
+        if (amountIn > 0) {
+            require(tokenIn != address(0) && tokenOut != address(0), "token=0");
+
+            _approveIfNeeded(tokenIn, router, amountIn);
+
+            ISwapRouterV3Pancake.ExactInputSingleParams
+                memory p = ISwapRouterV3Pancake.ExactInputSingleParams({
+                    tokenIn: tokenIn,
+                    tokenOut: tokenOut,
+                    fee: fee,
+                    recipient: address(this),
+                    deadline: block.timestamp + 900,
+                    amountIn: amountIn,
+                    amountOutMinimum: amountOutMinimum,
+                    sqrtPriceLimitX96: sqrtPriceLimitX96
+                });
+
+            amountOut = ISwapRouterV3Pancake(router).exactInputSingle{value: 0}(
+                p
+            );
+
+            IERC20(tokenIn).forceApprove(router, 0);
+
+            emit Swapped(router, tokenIn, tokenOut, amountIn, amountOut);
+        }
+
+        // 4) abrir nova posição usando todos os saldos idle atuais do vault
+        (newTokenId, newLiq) = _openWithAllIdle(newLower, newUpper);
+
+        // 5) Stake position
+        try adapter.stakePosition(address(this)) {
+            emit Staked();
+        } catch {}
+
+        return (amountOut, newTokenId, newLiq);
     }
 
     // ===== staking (optional) =====
