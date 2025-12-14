@@ -2,7 +2,7 @@
 pragma solidity ^0.8.24;
 
 import "forge-std/Script.sol";
-import { ISingleUserVault } from "../src/interfaces/ISingleUserVault.sol";
+import {ISingleUserVault} from "../../src/interfaces/ISingleUserVault.sol";
 
 /// @notice Opens the initial Uniswap v3 LP position on the vault.
 /// @dev Expects env vars:

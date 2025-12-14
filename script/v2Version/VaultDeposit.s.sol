@@ -13,7 +13,7 @@ pragma solidity ^0.8.24;
  * - Ensure AMOUNT_RAW already accounts for token decimals.
  */
 import "forge-std/Script.sol";
-import {IERC20} from "../src/interfaces/IERC20.sol";
+import {IERC20} from "../../src/interfaces/IERC20.sol";
 
 contract VaultDeposit is Script {
     function run() external {

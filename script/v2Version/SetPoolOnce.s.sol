@@ -2,7 +2,7 @@
 pragma solidity ^0.8.24;
 
 import "forge-std/Script.sol";
-import { ISingleUserVault } from "../src/interfaces/ISingleUserVault.sol";
+import {ISingleUserVault} from "../../src/interfaces/ISingleUserVault.sol";
 
 /// @notice Utility script to set the pool (direct) or via factory (later).
 contract SetPoolOnce is Script {

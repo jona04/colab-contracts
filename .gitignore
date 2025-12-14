@@ -1,6 +1,6 @@
 # Foundry / build
 out/
-out-*
+out*
 cache/
 broadcast/
 
