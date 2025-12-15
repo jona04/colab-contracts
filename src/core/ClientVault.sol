@@ -387,6 +387,41 @@ contract ClientVault is ReentrancyGuard {
     // -------------------------------------------------------------------------
 
     /**
+     * @notice Swap manual via Pancake V3 usando o router fixo do vault.
+     * @dev
+     * - Apenas o owner pode chamar.
+     * - Usa sempre o `dexRouter` imutável.
+     * - Mantém os fundos dentro do vault (recipient = address(this)).
+     * - Útil para conversão pontual (ex.: rewards -> USDC para
+     *   contabilizar em convert_gauge_to_usdc no backend).
+     *
+     * @param tokenIn  Token de entrada.
+     * @param tokenOut Token de saída.
+     * @param fee      Fee tier da pool.
+     * @param amountIn Quantidade exata de entrada (raw).
+     * @param amountOutMinimum Mínimo aceitável de saída (slippage).
+     * @param sqrtPriceLimitX96 Limite opcional de preço (0 = sem limite).
+     * @return amountOut Quantidade recebida de tokenOut.
+     */
+    function swapExactInPancake(
+        address tokenIn,
+        address tokenOut,
+        uint24 fee,
+        uint256 amountIn,
+        uint256 amountOutMinimum,
+        uint160 sqrtPriceLimitX96
+    ) external onlyOwner nonReentrant returns (uint256 amountOut) {
+        amountOut = _swapExactInPancake(
+            tokenIn,
+            tokenOut,
+            fee,
+            amountIn,
+            amountOutMinimum,
+            sqrtPriceLimitX96
+        );
+    }
+
+    /**
      * @notice Open the initial position using all idle balances in the vault.
      * @dev Only callable by the owner. Will revert if no funds.
      * @param lower Lower tick of the position.
