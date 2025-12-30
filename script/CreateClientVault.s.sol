@@ -10,7 +10,7 @@ import {VaultFactory} from "../src/core/VaultFactory.sol";
 ///  - VAULT_FACTORY_ADDRESS
 ///  - STRATEGY_ID (uint)
 ///  - OWNER_OVERRIDE (optional, can be 0x0000.. if you want msg.sender)
-contract CreateClientVaultScript is Script {
+contract CreateClientVault is Script {
     function run() external {
         uint256 pk = vm.envUint("PRIVATE_KEY");
         address factoryAddr = vm.envAddress("VAULT_FACTORY_ADDRESS");

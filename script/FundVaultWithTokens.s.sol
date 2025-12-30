@@ -13,9 +13,9 @@ import {IERC20} from "openzeppelin-contracts/contracts/token/ERC20/IERC20.sol";
 contract FundVaultWithTokens is Script {
     function run() external {
         uint256 pk = vm.envUint("PRIVATE_KEY");
-        address token = vm.envAddress("TOKEN_ADDRESS");
+        address token = vm.envAddress("TOKEN0_ADDRESS");
         address vault = vm.envAddress("VAULT_ADDRESS");
-        uint256 amount = vm.envUint("AMOUNT");
+        uint256 amount = 0.001 * 1e18;
 
         vm.startBroadcast(pk);
 
