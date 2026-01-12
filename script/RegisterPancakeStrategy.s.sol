@@ -9,7 +9,7 @@ import {StrategyRegistry} from "../src/core/StrategyRegistry.sol";
 ///  - PRIVATE_KEY (must be Owner of registry)
 ///  - STRATEGY_REGISTRY_ADDRESS
 ///  - ADAPTER_ADDRESS
-///  - DEX_ROUTER_ADDRESS (Pancake Router v3)
+///  - DEX_ROUTER_ADDRESS
 ///  - TOKEN0_ADDRESS
 ///  - TOKEN1_ADDRESS
 ///  - STRATEGY_NAME (string)
@@ -28,6 +28,10 @@ contract RegisterPancakeStrategy is Script {
         vm.startBroadcast(pk);
 
         StrategyRegistry registry = StrategyRegistry(registryAddr);
+
+        registry.setAdapterAllowed(adapter, true);
+        registry.setRouterAllowed(router, true);
+
         uint256 strategyId = registry.registerStrategy(
             adapter,
             router,
@@ -41,7 +45,8 @@ contract RegisterPancakeStrategy is Script {
 
         console2.log("Strategy registered:");
         console2.log("StrategyRegistry:", registryAddr);
-        console2.log("StrategyId:", strategyId);
+        console2.log("StrategyOwner:", vm.addr(pk));
+        console2.log("StrategyId (per-owner):", strategyId);
         console2.log("Adapter:", adapter);
         console2.log("Router:", router);
         console2.log("token0:", token0);

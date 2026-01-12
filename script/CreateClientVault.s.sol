@@ -8,14 +8,14 @@ import {VaultFactory} from "../src/core/VaultFactory.sol";
 /// @dev Env:
 ///  - PRIVATE_KEY (tx sender)
 ///  - VAULT_FACTORY_ADDRESS
-///  - STRATEGY_ID (uint)
-///  - OWNER_OVERRIDE (optional, can be 0x0000.. if you want msg.sender)
+///  - STRATEGY_ID (uint) // per-owner strategy id
+///  - OWNER_OVERRIDE (optional; if omitted or 0x0, uses msg.sender)
 contract CreateClientVault is Script {
     function run() external {
         uint256 pk = vm.envUint("PRIVATE_KEY");
         address factoryAddr = vm.envAddress("VAULT_FACTORY_ADDRESS");
         uint256 strategyId = vm.envUint("STRATEGY_ID");
-        address ownerOverride = vm.envAddress("OWNER_OVERRIDE");
+        address ownerOverride = vm.envOr("OWNER_OVERRIDE", address(0));
 
         vm.startBroadcast(pk);
 
@@ -24,10 +24,15 @@ contract CreateClientVault is Script {
 
         vm.stopBroadcast();
 
+        address vaultOwner = (ownerOverride != address(0))
+            ? ownerOverride
+            : vm.addr(pk);
+
         console2.log("ClientVault created:");
         console2.log("Factory:", factoryAddr);
         console2.log("Vault:", vault);
-        console2.log("StrategyId:", strategyId);
+        console2.log("StrategyId (per-owner):", strategyId);
+        console2.log("VaultOwner:", vaultOwner);
         console2.log("OwnerOverride:", ownerOverride);
     }
 }

@@ -10,6 +10,7 @@ import {StrategyRegistry} from "../src/core/StrategyRegistry.sol";
 contract DeployStrategyRegistry is Script {
     function run() external {
         uint256 pk = vm.envUint("PRIVATE_KEY");
+
         vm.startBroadcast(pk);
 
         address owner = vm.addr(pk);
