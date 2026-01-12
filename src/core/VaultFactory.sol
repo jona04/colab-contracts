@@ -9,43 +9,28 @@ import "./StrategyRegistry.sol";
 
 /**
  * @title VaultFactory
- * @notice Factory responsible for deploying ClientVault instances linked to registered strategies.
+ * @notice Factory responsible for deploying ClientVault instances linked to user-owned strategies.
  * @dev
- * - This contract is NOT upgradeable and does NOT deploy proxies: each ClientVault is a
- *   standalone contract with its own immutable configuration.
- * - The factory enforces that:
- *     * the strategy exists and is active in StrategyRegistry;
- *     * the adapter and dexRouter come from that registry;
- *     * the automation executor and feeCollector are wired consistently.
- * - It keeps simple indexing of created vaults:
+ * - Enforces that the strategy is owned by the vault owner (strategyOwner == vaultOwner).
+ * - Requires the strategy to exist and be active under that owner in StrategyRegistry.
+ * - Keeps indexing of created vaults:
  *     * by global index,
  *     * by owner,
- *     * by strategyId.
+ *     * by (owner, strategyId).
  */
 contract VaultFactory is Ownable, ReentrancyGuard {
-    /// @notice Global automation executor address (Colab bot) used for all ClientVaults by default.
     address public executor;
-
-    /// @notice Strategy registry used to validate and fetch strategy wiring.
     StrategyRegistry public immutable strategyRegistry;
-
-    /// @notice Protocol-level fee collector; can be zero if fees are disabled for now.
     address public feeCollector;
 
-    /// @notice Default automation cooldown used when creating new ClientVaults (in seconds).
     uint32 public defaultCooldownSec;
-
-    /// @notice Default max slippage in basis points used when creating new ClientVaults.
     uint16 public defaultMaxSlippageBps;
-
-    /// @notice Default flag indicating whether automation is allowed to perform swaps.
     bool public defaultAllowSwap;
 
-    /// @notice Simple record of a deployed vault.
     struct VaultInfo {
         address vault;
         address owner;
-        uint256 strategyId;
+        uint256 strategyId; // per-owner strategy id
     }
 
     /// @notice Array of all ClientVaults created by this factory.
@@ -54,8 +39,9 @@ contract VaultFactory is Ownable, ReentrancyGuard {
     /// @notice Mapping of owner => list of vault addresses.
     mapping(address => address[]) public vaultsByOwner;
 
-    /// @notice Mapping of strategyId => list of vault addresses.
-    mapping(uint256 => address[]) public vaultsByStrategy;
+    /// @notice Mapping (owner => strategyId => vault addresses).
+    mapping(address => mapping(uint256 => address[]))
+        public vaultsByOwnerStrategy;
 
     // -------------------------------------------------------------------------
     // Events
@@ -189,14 +175,15 @@ contract VaultFactory is Ownable, ReentrancyGuard {
     }
 
     /**
-     * @notice Returns all vaults using a given strategyId.
+     * @notice Returns all vaults using a given owner and strategyId.
      * @param strategyId Strategy id.
      * @return vaults Array of vault addresses.
      */
-    function getVaultsByStrategy(
+    function getVaultsByOwnerAndStrategy(
+        address owner,
         uint256 strategyId
     ) external view returns (address[] memory vaults) {
-        return vaultsByStrategy[strategyId];
+        return vaultsByOwnerStrategy[owner][strategyId];
     }
 
     // -------------------------------------------------------------------------
@@ -204,14 +191,12 @@ contract VaultFactory is Ownable, ReentrancyGuard {
     // -------------------------------------------------------------------------
 
     /**
-     * @notice Create a new ClientVault linked to a specific strategy.
+     * @notice Create a new ClientVault linked to a user-owned strategy.
      * @dev
-     * - Validates that the strategy exists and is active.
-     * - Uses adapter and dexRouter from the registry.
-     * - Wires the global executor and feeCollector into the ClientVault.
-     * - Uses default automation parameters from this factory.
-     * - `vaultOwner` is either `ownerOverride` (if non-zero) or `msg.sender`.
-     * @param strategyId Id of the strategy to be used by the new vault.
+     * - Resolves the vault owner from ownerOverride or msg.sender.
+     * - Fetches the strategy under (vaultOwner, strategyId) and requires it to be active.
+     * - Deploys a new ClientVault with adapter/router from that strategy.
+     * @param strategyId Per-owner strategy id (scoped to the vault owner).
      * @param ownerOverride Optional explicit owner address; if zero, defaults to msg.sender.
      * @return vaultAddr Address of the newly created ClientVault.
      */
@@ -219,19 +204,17 @@ contract VaultFactory is Ownable, ReentrancyGuard {
         uint256 strategyId,
         address ownerOverride
     ) external nonReentrant returns (address vaultAddr) {
-        // 1) Resolve and validate strategy
-        StrategyRegistry.Strategy memory strat = strategyRegistry.getStrategy(
-            strategyId
-        );
-        require(strat.active, "VaultFactory: strategy not active");
-
-        // 2) Decide owner
         address vaultOwner = (ownerOverride != address(0))
             ? ownerOverride
             : msg.sender;
         require(vaultOwner != address(0), "VaultFactory: owner=0");
 
-        // 3) Deploy a new ClientVault with immutable wiring
+        StrategyRegistry.Strategy memory strat = strategyRegistry.getStrategy(
+            vaultOwner,
+            strategyId
+        );
+        require(strat.active, "VaultFactory: strategy not active");
+
         ClientVault vault = new ClientVault(
             vaultOwner,
             executor,
@@ -243,9 +226,9 @@ contract VaultFactory is Ownable, ReentrancyGuard {
             defaultMaxSlippageBps,
             defaultAllowSwap
         );
+
         vaultAddr = address(vault);
 
-        // 4) Indexing
         uint256 idx = allVaults.length;
         allVaults.push(
             VaultInfo({
@@ -254,8 +237,9 @@ contract VaultFactory is Ownable, ReentrancyGuard {
                 strategyId: strategyId
             })
         );
+
         vaultsByOwner[vaultOwner].push(vaultAddr);
-        vaultsByStrategy[strategyId].push(vaultAddr);
+        vaultsByOwnerStrategy[vaultOwner][strategyId].push(vaultAddr);
 
         emit ClientVaultDeployed(vaultAddr, vaultOwner, strategyId, idx);
     }

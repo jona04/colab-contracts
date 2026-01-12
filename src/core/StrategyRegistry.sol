@@ -5,65 +5,79 @@ import {Ownable} from "openzeppelin-contracts/contracts/access/Ownable.sol";
 
 /**
  * @title StrategyRegistry
- * @notice Registry of whitelisted strategies that can be used by ClientVaults.
+ * @notice Per-user registry of strategies that can be used by ClientVaults.
  * @dev
- * - Controlled by the protocol owner (Colab).
- * - Each strategy binds:
- *     * a Concentrated Liquidity adapter implementation,
- *     * a DEX router,
- *     * the underlying token0/token1 pair,
- *     * human-readable metadata.
- * - The VaultFactory queries this registry to ensure a strategy is valid and active
- *   before deploying a new ClientVault.
+ * - The protocol owner maintains allowlists for adapters and routers.
+ * - Each user registers and manages their own strategies, indexed by (owner, strategyId).
+ * - Strategy ownership is enforced by VaultFactory: the strategy owner must match the vault owner.
  */
 contract StrategyRegistry is Ownable {
     /// @notice Metadata describing a single strategy.
     struct Strategy {
-        // Core wiring
-        address adapter; // CL adapter bound to a specific pool/gauge
-        address dexRouter; // DEX router to be used by ClientVaults
-        // Underlying assets (for sanity checks / off-chain UX)
+        address adapter;
+        address dexRouter;
         address token0;
         address token1;
-        // Human metadata (for dashboards / off-chain discovery)
         string name;
         string description;
-        // Lifecycle
         bool active;
     }
 
-    /// @notice Next strategy id to be assigned (starts at 1).
-    uint256 public nextStrategyId = 1;
+    // -------------------------------------------------------------------------
+    // Allowlists (protocol-level safety)
+    // -------------------------------------------------------------------------
 
-    /// @notice Mapping of strategy id => Strategy metadata.
-    mapping(uint256 => Strategy) private _strategies;
+    /// @notice Approved adapter contracts that users can reference.
+    mapping(address => bool) public allowedAdapters;
+
+    /// @notice Approved DEX routers that users can reference.
+    mapping(address => bool) public allowedRouters;
+
+    // -------------------------------------------------------------------------
+    // Per-user storage
+    // -------------------------------------------------------------------------
+
+    /// @notice Next strategy id to be assigned per owner (starts at 1).
+    mapping(address => uint256) public nextStrategyIdByOwner;
+
+    /// @notice Mapping (owner => strategyId => Strategy).
+    mapping(address => mapping(uint256 => Strategy)) private _strategiesByOwner;
+
+    /// @notice Owner => list of strategyIds (for enumeration).
+    mapping(address => uint256[]) private _strategyIdsByOwner;
 
     // -------------------------------------------------------------------------
     // Events
     // -------------------------------------------------------------------------
 
-    /// @notice Emitted when a new strategy is registered.
+    event AdapterAllowlistUpdated(address indexed adapter, bool allowed);
+    event RouterAllowlistUpdated(address indexed router, bool allowed);
+
     event StrategyRegistered(
+        address indexed owner,
         uint256 indexed strategyId,
         address indexed adapter,
-        address indexed dexRouter,
+        address dexRouter,
         address token0,
         address token1,
         string name
     );
 
-    /// @notice Emitted when a strategy is updated.
     event StrategyUpdated(
+        address indexed owner,
         uint256 indexed strategyId,
         address indexed adapter,
-        address indexed dexRouter,
+        address dexRouter,
         address token0,
         address token1,
         string name
     );
 
-    /// @notice Emitted when a strategy is activated or deactivated.
-    event StrategyStatusChanged(uint256 indexed strategyId, bool active);
+    event StrategyStatusChanged(
+        address indexed owner,
+        uint256 indexed strategyId,
+        bool active
+    );
 
     // -------------------------------------------------------------------------
     // Constructor
@@ -76,47 +90,129 @@ contract StrategyRegistry is Ownable {
     constructor(address initialOwner) Ownable(initialOwner) {}
 
     // -------------------------------------------------------------------------
-    // Public views
+    // Protocol owner-only allowlist management
     // -------------------------------------------------------------------------
 
     /**
-     * @notice Returns full metadata for a given strategy id.
-     * @param strategyId Id of the strategy to query.
+     * @notice Allow or disallow a given adapter contract.
+     * @param adapter Adapter address.
+     * @param allowed True to allow, false to disallow.
+     */
+    function setAdapterAllowed(
+        address adapter,
+        bool allowed
+    ) external onlyOwner {
+        require(adapter != address(0), "StrategyRegistry: adapter=0");
+        allowedAdapters[adapter] = allowed;
+        emit AdapterAllowlistUpdated(adapter, allowed);
+    }
+
+    /**
+     * @notice Allow or disallow a given router contract.
+     * @param router Router address.
+     * @param allowed True to allow, false to disallow.
+     */
+    function setRouterAllowed(address router, bool allowed) external onlyOwner {
+        require(router != address(0), "StrategyRegistry: router=0");
+        allowedRouters[router] = allowed;
+        emit RouterAllowlistUpdated(router, allowed);
+    }
+
+    // -------------------------------------------------------------------------
+    // Views
+    // -------------------------------------------------------------------------
+
+    /**
+     * @notice Returns full metadata for a given owner's strategy id.
+     * @param owner Owner of the strategy.
+     * @param strategyId Id of the strategy to query (scoped to `owner`).
      * @return s Strategy struct.
      */
     function getStrategy(
+        address owner,
         uint256 strategyId
     ) public view returns (Strategy memory s) {
-        s = _strategies[strategyId];
+        s = _strategiesByOwner[owner][strategyId];
         require(s.adapter != address(0), "StrategyRegistry: unknown strategy");
     }
 
     /**
-     * @notice Checks if a strategy is currently active.
-     * @param strategyId Id of the strategy.
-     * @return True if the strategy exists and is active.
+     * @notice Returns full metadata for msg.sender's strategy id.
+     * @param strategyId Id of the strategy (scoped to msg.sender).
+     * @return s Strategy struct.
      */
-    function isStrategyActive(uint256 strategyId) external view returns (bool) {
-        Strategy memory s = _strategies[strategyId];
+    function getMyStrategy(
+        uint256 strategyId
+    ) external view returns (Strategy memory s) {
+        return getStrategy(msg.sender, strategyId);
+    }
+
+    /**
+     * @notice Returns the number of strategies registered by a given owner.
+     * @param owner Owner address.
+     * @return length Count of strategies.
+     */
+    function strategiesLengthByOwner(
+        address owner
+    ) external view returns (uint256 length) {
+        return _strategyIdsByOwner[owner].length;
+    }
+
+    /**
+     * @notice Returns the list of strategyIds registered by a given owner.
+     * @param owner Owner address.
+     * @return ids Array of ids.
+     */
+    function getStrategyIdsByOwner(
+        address owner
+    ) external view returns (uint256[] memory ids) {
+        return _strategyIdsByOwner[owner];
+    }
+
+    /**
+     * @notice Returns all strategies registered by a given owner.
+     * @dev This is a view-only helper intended for off-chain indexing/UI.
+     * @param owner Owner address.
+     * @return all Array of Strategy structs.
+     */
+    function getAllStrategiesByOwner(
+        address owner
+    ) external view returns (Strategy[] memory all) {
+        uint256[] memory ids = _strategyIdsByOwner[owner];
+        all = new Strategy[](ids.length);
+        for (uint256 i = 0; i < ids.length; i++) {
+            all[i] = _strategiesByOwner[owner][ids[i]];
+        }
+    }
+
+    /**
+     * @notice Checks if a strategy exists and is active for a given owner.
+     * @param owner Owner of the strategy.
+     * @param strategyId Id of the strategy.
+     * @return True if exists and active.
+     */
+    function isStrategyActive(
+        address owner,
+        uint256 strategyId
+    ) external view returns (bool) {
+        Strategy memory s = _strategiesByOwner[owner][strategyId];
         return s.adapter != address(0) && s.active;
     }
 
     // -------------------------------------------------------------------------
-    // Owner-only mutators
+    // User mutators
     // -------------------------------------------------------------------------
 
     /**
-     * @notice Register a new strategy in the registry.
-     * @dev
-     * - Assigns a new incremental strategyId.
-     * - Marks the strategy as active by default.
+     * @notice Register a new strategy for msg.sender.
+     * @dev Requires protocol allowlists for adapter/router.
      * @param adapter CL adapter contract bound to the target pool/gauge.
      * @param dexRouter DEX router to be used by ClientVaults for swaps.
      * @param token0 Underlying token0 of the pool.
      * @param token1 Underlying token1 of the pool.
-     * @param name Human-readable name (e.g. "Pancake CAKE/USDC Tight Range").
-     * @param description Free-form description (e.g. JSON URI, IPFS hash, etc.).
-     * @return strategyId Newly created strategy id.
+     * @param name Human-readable name.
+     * @param description Free-form description (e.g., JSON URI, IPFS hash).
+     * @return strategyId Newly created per-user strategy id.
      */
     function registerStrategy(
         address adapter,
@@ -125,18 +221,34 @@ contract StrategyRegistry is Ownable {
         address token1,
         string calldata name,
         string calldata description
-    ) external onlyOwner returns (uint256 strategyId) {
+    ) external returns (uint256 strategyId) {
         require(adapter != address(0), "StrategyRegistry: adapter=0");
-        require(dexRouter != address(0), "StrategyRegistry: dexRouter=0");
+        require(dexRouter != address(0), "StrategyRegistry: router=0");
         require(
             token0 != address(0) && token1 != address(0),
             "StrategyRegistry: tokens=0"
         );
+        require(token0 != token1, "StrategyRegistry: identical tokens");
 
-        strategyId = nextStrategyId;
-        nextStrategyId++;
+        require(
+            allowedAdapters[adapter],
+            "StrategyRegistry: adapter not allowed"
+        );
+        require(
+            allowedRouters[dexRouter],
+            "StrategyRegistry: router not allowed"
+        );
 
-        _strategies[strategyId] = Strategy({
+        address owner = msg.sender;
+        uint256 nextId = nextStrategyIdByOwner[owner];
+        if (nextId == 0) {
+            nextId = 1;
+        }
+
+        strategyId = nextId;
+        nextStrategyIdByOwner[owner] = nextId + 1;
+
+        _strategiesByOwner[owner][strategyId] = Strategy({
             adapter: adapter,
             dexRouter: dexRouter,
             token0: token0,
@@ -146,7 +258,10 @@ contract StrategyRegistry is Ownable {
             active: true
         });
 
+        _strategyIdsByOwner[owner].push(strategyId);
+
         emit StrategyRegistered(
+            owner,
             strategyId,
             adapter,
             dexRouter,
@@ -157,9 +272,9 @@ contract StrategyRegistry is Ownable {
     }
 
     /**
-     * @notice Update metadata of an existing strategy (adapter/router/tokens/metadata).
+     * @notice Update metadata of an existing msg.sender strategy.
      * @dev Does not change the active flag.
-     * @param strategyId Strategy id to be updated.
+     * @param strategyId Strategy id to be updated (scoped to msg.sender).
      * @param adapter New adapter address.
      * @param dexRouter New router address.
      * @param token0 New token0.
@@ -175,15 +290,26 @@ contract StrategyRegistry is Ownable {
         address token1,
         string calldata name,
         string calldata description
-    ) external onlyOwner {
-        Strategy storage s = _strategies[strategyId];
+    ) external {
+        address owner = msg.sender;
+        Strategy storage s = _strategiesByOwner[owner][strategyId];
         require(s.adapter != address(0), "StrategyRegistry: unknown strategy");
 
         require(adapter != address(0), "StrategyRegistry: adapter=0");
-        require(dexRouter != address(0), "StrategyRegistry: dexRouter=0");
+        require(dexRouter != address(0), "StrategyRegistry: router=0");
         require(
             token0 != address(0) && token1 != address(0),
             "StrategyRegistry: tokens=0"
+        );
+        require(token0 != token1, "StrategyRegistry: identical tokens");
+
+        require(
+            allowedAdapters[adapter],
+            "StrategyRegistry: adapter not allowed"
+        );
+        require(
+            allowedRouters[dexRouter],
+            "StrategyRegistry: router not allowed"
         );
 
         s.adapter = adapter;
@@ -194,6 +320,7 @@ contract StrategyRegistry is Ownable {
         s.description = description;
 
         emit StrategyUpdated(
+            owner,
             strategyId,
             adapter,
             dexRouter,
@@ -204,18 +331,16 @@ contract StrategyRegistry is Ownable {
     }
 
     /**
-     * @notice Activate or deactivate a given strategy.
-     * @param strategyId Strategy id to update.
+     * @notice Activate or deactivate a msg.sender strategy.
+     * @param strategyId Strategy id to update (scoped to msg.sender).
      * @param active New active flag.
      */
-    function setStrategyActive(
-        uint256 strategyId,
-        bool active
-    ) external onlyOwner {
-        Strategy storage s = _strategies[strategyId];
+    function setStrategyActive(uint256 strategyId, bool active) external {
+        address owner = msg.sender;
+        Strategy storage s = _strategiesByOwner[owner][strategyId];
         require(s.adapter != address(0), "StrategyRegistry: unknown strategy");
 
         s.active = active;
-        emit StrategyStatusChanged(strategyId, active);
+        emit StrategyStatusChanged(owner, strategyId, active);
     }
 }
