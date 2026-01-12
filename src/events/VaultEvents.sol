@@ -10,7 +10,13 @@ interface VaultEvents {
     event Opened(uint indexed tokenId, int24 lower, int24 upper);
 
     /// @notice Emitted after a manual rebalance.
-    event Rebalanced(uint indexed tokenId, int24 lower, int24 upper, uint fees0, uint fees1);
+    event Rebalanced(
+        uint indexed tokenId,
+        int24 lower,
+        int24 upper,
+        uint fees0,
+        uint fees1
+    );
 
     /// @notice Emitted after funds are withdrawn from the vault.
     event Withdrawn(uint amount0, uint amount1);
