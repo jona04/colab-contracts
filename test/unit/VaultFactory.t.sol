@@ -13,7 +13,7 @@ import {Ownable} from "openzeppelin-contracts/contracts/access/Ownable.sol";
 
 /**
  * @title VaultFactoryTest
- * @notice Unit tests for VaultFactory.
+ * @notice Unit tests for VaultFactory (owner-scoped strategies).
  */
 contract VaultFactoryTest is Test {
     VaultFactory internal factory;
@@ -25,9 +25,11 @@ contract VaultFactoryTest is Test {
     MockRouterPancake internal router;
 
     address internal factoryOwner = address(0xA11CE);
-    address internal strategyOwner = factoryOwner;
+    address internal protocolOwner = factoryOwner;
+
     address internal globalExecutor = address(0xE1EC);
     address internal feeCollector = address(0xFEE5);
+
     address internal user = address(0xBEEF);
     address internal other = address(0xCAFE);
 
@@ -36,9 +38,19 @@ contract VaultFactoryTest is Test {
     bool internal defaultAllowSwap = true;
 
     function setUp() public {
-        // Deploy registry and factory under factoryOwner
-        vm.startPrank(factoryOwner);
-        registry = new StrategyRegistry(strategyOwner);
+        // Deploy tokens, adapter and router
+        token0 = new MockERC20("Token0", "T0");
+        token1 = new MockERC20("Token1", "T1");
+        adapter = new MockAdapter(address(token0), address(token1));
+        router = new MockRouterPancake();
+
+        // Deploy registry + allowlist (protocolOwner)
+        vm.startPrank(protocolOwner);
+        registry = new StrategyRegistry(protocolOwner);
+        registry.setAdapterAllowed(address(adapter), true);
+        registry.setRouterAllowed(address(router), true);
+
+        // Deploy factory
         factory = new VaultFactory(
             factoryOwner,
             address(registry),
@@ -50,14 +62,8 @@ contract VaultFactoryTest is Test {
         );
         vm.stopPrank();
 
-        // Deploy tokens, adapter and router
-        token0 = new MockERC20("Token0", "T0");
-        token1 = new MockERC20("Token1", "T1");
-        adapter = new MockAdapter(address(token0), address(token1));
-        router = new MockRouterPancake();
-
-        // Register a base strategy
-        vm.prank(strategyOwner);
+        // Register a base strategy for `user` (NOT for protocolOwner!)
+        vm.prank(user);
         registry.registerStrategy(
             address(adapter),
             address(router),
@@ -69,7 +75,7 @@ contract VaultFactoryTest is Test {
     }
 
     // -------------------------------------------------------------------------
-    // Configuration
+    // Configuration (onlyOwner)
     // -------------------------------------------------------------------------
 
     function testSetExecutorOnlyOwner() public {
@@ -86,11 +92,7 @@ contract VaultFactoryTest is Test {
 
         vm.prank(factoryOwner);
         factory.setExecutor(newExecutor);
-        assertEq(
-            factory.executor(),
-            newExecutor,
-            "Executor should be updated by factory owner"
-        );
+        assertEq(factory.executor(), newExecutor);
     }
 
     function testSetExecutorZeroAddressReverts() public {
@@ -113,11 +115,7 @@ contract VaultFactoryTest is Test {
 
         vm.prank(factoryOwner);
         factory.setFeeCollector(newCollector);
-        assertEq(
-            factory.feeCollector(),
-            newCollector,
-            "Fee collector should be updated"
-        );
+        assertEq(factory.feeCollector(), newCollector);
     }
 
     function testSetDefaultsOnlyOwner() public {
@@ -137,21 +135,9 @@ contract VaultFactoryTest is Test {
         vm.prank(factoryOwner);
         factory.setDefaults(newCooldown, newSlippage, newAllowSwap);
 
-        assertEq(
-            factory.defaultCooldownSec(),
-            newCooldown,
-            "Cooldown default should be updated"
-        );
-        assertEq(
-            factory.defaultMaxSlippageBps(),
-            newSlippage,
-            "Slippage default should be updated"
-        );
-        assertEq(
-            factory.defaultAllowSwap(),
-            newAllowSwap,
-            "AllowSwap default should be updated"
-        );
+        assertEq(factory.defaultCooldownSec(), newCooldown);
+        assertEq(factory.defaultMaxSlippageBps(), newSlippage);
+        assertEq(factory.defaultAllowSwap(), newAllowSwap);
     }
 
     // -------------------------------------------------------------------------
@@ -159,115 +145,101 @@ contract VaultFactoryTest is Test {
     // -------------------------------------------------------------------------
 
     function testCreateClientVaultWithActiveStrategy() public {
-        uint256 strategyId = 1; // first registered
+        uint256 strategyId = 1;
 
-        // msg.sender is user; ownerOverride = address(0) so the vault owner == user
+        // ownerOverride = 0 -> vault owner == msg.sender (user)
         vm.prank(user);
         address vaultAddr = factory.createClientVault(strategyId, address(0));
 
-        assertTrue(vaultAddr != address(0), "Vault address should be non-zero");
+        assertTrue(vaultAddr != address(0));
 
-        // Check global indexing
-        assertEq(
-            factory.allVaultsLength(),
-            1,
-            "There should be exactly one vault recorded"
-        );
+        // global indexing
+        assertEq(factory.allVaultsLength(), 1);
 
         (address infoVault, address infoOwner, uint256 infoStrategyId) = factory
             .allVaults(0);
+        assertEq(infoVault, vaultAddr);
+        assertEq(infoOwner, user);
+        assertEq(infoStrategyId, strategyId);
 
-        assertEq(
-            infoVault,
-            vaultAddr,
-            "VaultInfo should store correct vault address"
-        );
-        assertEq(infoOwner, user, "VaultInfo should store correct owner");
-        assertEq(
-            infoStrategyId,
-            strategyId,
-            "VaultInfo should store correct strategyId"
-        );
-
-        // Check vaultsByOwner mapping
+        // by owner
         address[] memory byOwner = factory.getVaultsByOwner(user);
-        assertEq(byOwner.length, 1, "User should have exactly one vault");
-        assertEq(
-            byOwner[0],
-            vaultAddr,
-            "VaultsByOwner should point to the created vault"
-        );
+        assertEq(byOwner.length, 1);
+        assertEq(byOwner[0], vaultAddr);
 
-        // Check vaultsByStrategy mapping
-        address[] memory byStrategy = factory.getVaultsByStrategy(strategyId);
-        assertEq(
-            byStrategy.length,
-            1,
-            "Strategy should have exactly one vault"
-        );
-        assertEq(
-            byStrategy[0],
-            vaultAddr,
-            "VaultsByStrategy should point to the created vault"
-        );
-
-        // Introspect wiring on the deployed ClientVault
-        ClientVault vault = ClientVault(vaultAddr);
-        assertEq(
-            vault.owner(),
+        // by (owner, strategy)
+        address[] memory byOwnerStrategy = factory.getVaultsByOwnerAndStrategy(
             user,
-            "ClientVault.owner should be wired as user"
+            strategyId
         );
-        assertEq(
-            vault.executor(),
-            factory.executor(),
-            "ClientVault.executor should be wired from factory"
-        );
-        assertEq(
-            address(vault.adapter()),
-            address(adapter),
-            "ClientVault.adapter should come from StrategyRegistry"
-        );
-        assertEq(
-            vault.dexRouter(),
-            address(router),
-            "ClientVault.dexRouter should come from StrategyRegistry"
-        );
-        assertEq(
-            vault.feeCollector(),
-            factory.feeCollector(),
-            "ClientVault.feeCollector should match factory"
-        );
-        assertEq(
-            vault.strategyId(),
-            strategyId,
-            "ClientVault.strategyId should match parameter"
-        );
+        assertEq(byOwnerStrategy.length, 1);
+        assertEq(byOwnerStrategy[0], vaultAddr);
+
+        // introspect wiring
+        ClientVault vault = ClientVault(vaultAddr);
+        assertEq(vault.owner(), user);
+        assertEq(vault.executor(), factory.executor());
+        assertEq(address(vault.adapter()), address(adapter));
+        assertEq(vault.dexRouter(), address(router));
+        assertEq(vault.feeCollector(), factory.feeCollector());
+        assertEq(vault.strategyId(), strategyId);
     }
 
-    function testCreateClientVaultWithOwnerOverride() public {
+    function testCreateClientVaultWithOwnerOverrideUsesOverrideForStrategyLookup()
+        public
+    {
         uint256 strategyId = 1;
         address explicitOwner = address(0xE1EC);
 
-        vm.prank(user); // creator
+        // explicitOwner has NOT registered strategyId=1, so it must revert on registry.getStrategy(explicitOwner, 1)
+        vm.prank(user);
+        vm.expectRevert("StrategyRegistry: unknown strategy");
+        factory.createClientVault(strategyId, explicitOwner);
+    }
+
+    function testCreateClientVaultWithOwnerOverrideSuccessWhenOwnerHasStrategy()
+        public
+    {
+        uint256 strategyId = 1;
+        address explicitOwner = address(0xE1EC);
+
+        // register strategy for explicitOwner
+        vm.prank(explicitOwner);
+        registry.registerStrategy(
+            address(adapter),
+            address(router),
+            address(token0),
+            address(token1),
+            "OwnerOverride Strategy",
+            "d"
+        );
+
+        // create vault where ownerOverride == explicitOwner
+        vm.prank(user);
         address vaultAddr = factory.createClientVault(
             strategyId,
             explicitOwner
         );
 
         ClientVault vault = ClientVault(vaultAddr);
-        assertEq(
-            vault.owner(),
+        assertEq(vault.owner(), explicitOwner);
+
+        address[] memory byOwner = factory.getVaultsByOwner(explicitOwner);
+        assertEq(byOwner.length, 1);
+        assertEq(byOwner[0], vaultAddr);
+
+        address[] memory byOwnerStrategy = factory.getVaultsByOwnerAndStrategy(
             explicitOwner,
-            "ClientVault.owner should respect explicit ownerOverride"
+            strategyId
         );
+        assertEq(byOwnerStrategy.length, 1);
+        assertEq(byOwnerStrategy[0], vaultAddr);
     }
 
     function testCreateClientVaultFailsIfStrategyNotActive() public {
         uint256 strategyId = 1;
 
-        // Deactivate strategy in registry
-        vm.prank(strategyOwner);
+        vm.prank(user);
         registry.setStrategyActive(strategyId, false);
 
         vm.prank(user);
@@ -285,13 +257,9 @@ contract VaultFactoryTest is Test {
         vm.prank(user);
         factory.createClientVault(strategyId, address(0));
 
-        vm.prank(other);
+        vm.prank(user);
         factory.createClientVault(strategyId, address(0));
 
-        assertEq(
-            factory.allVaultsLength(),
-            2,
-            "allVaultsLength should reflect number of created vaults"
-        );
+        assertEq(factory.allVaultsLength(), 2);
     }
 }

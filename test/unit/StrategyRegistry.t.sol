@@ -8,92 +8,192 @@ import {Ownable} from "openzeppelin-contracts/contracts/access/Ownable.sol";
 
 /**
  * @title StrategyRegistryTest
- * @notice Unit tests for StrategyRegistry.
+ * @notice Unit tests for StrategyRegistry (per-owner strategies + protocol allowlists).
  */
 contract StrategyRegistryTest is Test {
     StrategyRegistry internal registry;
 
-    address internal owner = address(0xA0FFEE);
-    address internal other = address(0xB0FFEE);
+    address internal protocolOwner = address(0xA0FFEE);
+    address internal userA = address(0xB0FFEE);
+    address internal userB = address(0xC0FFEE);
 
-    address internal adapter = address(0xC0FFEE);
-    address internal dexRouter = address(0xD0FFEE);
+    address internal adapter = address(0x1111);
+    address internal adapter2 = address(0x2222);
+
+    address internal router = address(0xAAAA);
+    address internal router2 = address(0xBBBB);
+
     address internal token0 = address(0xE0FFEE);
     address internal token1 = address(0xF0FFEE);
 
     function setUp() public {
-        vm.prank(owner);
-        registry = new StrategyRegistry(owner);
+        vm.prank(protocolOwner);
+        registry = new StrategyRegistry(protocolOwner);
+
+        // allowlist adapter/router (protocol level)
+        vm.startPrank(protocolOwner);
+        registry.setAdapterAllowed(adapter, true);
+        registry.setAdapterAllowed(adapter2, true);
+        registry.setRouterAllowed(router, true);
+        registry.setRouterAllowed(router2, true);
+        vm.stopPrank();
     }
 
     // -------------------------------------------------------------------------
-    // Register
+    // allowlists
     // -------------------------------------------------------------------------
 
-    function testRegisterStrategySuccess() public {
+    function testAllowlistOnlyOwner() public {
+        vm.prank(userA);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                Ownable.OwnableUnauthorizedAccount.selector,
+                userA
+            )
+        );
+        registry.setAdapterAllowed(adapter, true);
+
+        vm.prank(userA);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                Ownable.OwnableUnauthorizedAccount.selector,
+                userA
+            )
+        );
+        registry.setRouterAllowed(router, true);
+    }
+
+    function testAllowlistZeroAddressReverts() public {
+        vm.prank(protocolOwner);
+        vm.expectRevert("StrategyRegistry: adapter=0");
+        registry.setAdapterAllowed(address(0), true);
+
+        vm.prank(protocolOwner);
+        vm.expectRevert("StrategyRegistry: router=0");
+        registry.setRouterAllowed(address(0), true);
+    }
+
+    // -------------------------------------------------------------------------
+    // registerStrategy
+    // -------------------------------------------------------------------------
+
+    function testRegisterStrategySuccess_MsgSenderScoped() public {
         string memory name = "Pancake CAKE/USDC";
         string memory description = "Tight-range delta-balanced strategy";
 
-        vm.prank(owner);
+        vm.prank(userA);
         uint256 strategyId = registry.registerStrategy(
             adapter,
-            dexRouter,
+            router,
             token0,
             token1,
             name,
             description
         );
 
-        assertEq(strategyId, 1, "First strategyId should be 1");
+        assertEq(strategyId, 1, "first per-owner id must be 1");
         assertEq(
-            registry.nextStrategyId(),
+            registry.nextStrategyIdByOwner(userA),
             2,
-            "nextStrategyId should increment"
+            "nextStrategyIdByOwner should increment"
         );
 
-        StrategyRegistry.Strategy memory s = registry.getStrategy(strategyId);
-        assertEq(s.adapter, adapter, "Adapter should be stored correctly");
-        assertEq(s.dexRouter, dexRouter, "Router should be stored correctly");
-        assertEq(s.token0, token0, "Token0 should be stored correctly");
-        assertEq(s.token1, token1, "Token1 should be stored correctly");
-        assertEq(s.active, true, "New strategy should be active by default");
-        assertEq(
-            keccak256(bytes(s.name)),
-            keccak256(bytes(name)),
-            "Name should match"
+        StrategyRegistry.Strategy memory s = registry.getStrategy(
+            userA,
+            strategyId
         );
+
+        assertEq(s.adapter, adapter);
+        assertEq(s.dexRouter, router);
+        assertEq(s.token0, token0);
+        assertEq(s.token1, token1);
+        assertTrue(s.active);
+
+        assertEq(keccak256(bytes(s.name)), keccak256(bytes(name)));
         assertEq(
             keccak256(bytes(s.description)),
-            keccak256(bytes(description)),
-            "Description should match"
+            keccak256(bytes(description))
         );
+
+        // enumeration
+        uint256[] memory ids = registry.getStrategyIdsByOwner(userA);
+        assertEq(ids.length, 1);
+        assertEq(ids[0], 1);
+
+        assertEq(registry.strategiesLengthByOwner(userA), 1);
     }
 
-    function testRegisterStrategyRequiresOwner() public {
-        vm.prank(other);
-        vm.expectRevert(
-            abi.encodeWithSelector(
-                Ownable.OwnableUnauthorizedAccount.selector,
-                other
-            )
+    function testRegisterStrategyPerOwnerCounterIndependence() public {
+        vm.prank(userA);
+        uint256 a1 = registry.registerStrategy(
+            adapter,
+            router,
+            token0,
+            token1,
+            "A1",
+            "d"
         );
-        registry.registerStrategy(adapter, dexRouter, token0, token1, "x", "y");
+        vm.prank(userA);
+        uint256 a2 = registry.registerStrategy(
+            adapter2,
+            router2,
+            token0,
+            token1,
+            "A2",
+            "d"
+        );
+
+        vm.prank(userB);
+        uint256 b1 = registry.registerStrategy(
+            adapter,
+            router,
+            token0,
+            token1,
+            "B1",
+            "d"
+        );
+
+        assertEq(a1, 1);
+        assertEq(a2, 2);
+        assertEq(b1, 1);
+    }
+
+    function testRegisterStrategyRequiresAllowlist() public {
+        address notAllowedAdapter = address(0xDEAD);
+        address notAllowedRouter = address(0xBEEF);
+
+        // adapter not allowed
+        vm.prank(userA);
+        vm.expectRevert("StrategyRegistry: adapter not allowed");
+        registry.registerStrategy(
+            notAllowedAdapter,
+            router,
+            token0,
+            token1,
+            "x",
+            "y"
+        );
+
+        // router not allowed
+        vm.prank(userA);
+        vm.expectRevert("StrategyRegistry: router not allowed");
+        registry.registerStrategy(
+            adapter,
+            notAllowedRouter,
+            token0,
+            token1,
+            "x",
+            "y"
+        );
     }
 
     function testRegisterStrategyZeroAddressesRevert() public {
-        vm.startPrank(owner);
+        vm.startPrank(userA);
 
         vm.expectRevert("StrategyRegistry: adapter=0");
-        registry.registerStrategy(
-            address(0),
-            dexRouter,
-            token0,
-            token1,
-            "x",
-            "y"
-        );
+        registry.registerStrategy(address(0), router, token0, token1, "x", "y");
 
-        vm.expectRevert("StrategyRegistry: dexRouter=0");
+        vm.expectRevert("StrategyRegistry: router=0");
         registry.registerStrategy(
             adapter,
             address(0),
@@ -106,7 +206,7 @@ contract StrategyRegistryTest is Test {
         vm.expectRevert("StrategyRegistry: tokens=0");
         registry.registerStrategy(
             adapter,
-            dexRouter,
+            router,
             address(0),
             token1,
             "x",
@@ -116,7 +216,7 @@ contract StrategyRegistryTest is Test {
         vm.expectRevert("StrategyRegistry: tokens=0");
         registry.registerStrategy(
             adapter,
-            dexRouter,
+            router,
             token0,
             address(0),
             "x",
@@ -126,44 +226,58 @@ contract StrategyRegistryTest is Test {
         vm.stopPrank();
     }
 
+    function testRegisterStrategyIdenticalTokensRevert() public {
+        vm.prank(userA);
+        vm.expectRevert("StrategyRegistry: identical tokens");
+        registry.registerStrategy(adapter, router, token0, token0, "x", "y");
+    }
+
     // -------------------------------------------------------------------------
-    // getStrategy & isStrategyActive
+    // getStrategy / getMyStrategy / isStrategyActive
     // -------------------------------------------------------------------------
 
     function testGetStrategyUnknownReverts() public {
         vm.expectRevert("StrategyRegistry: unknown strategy");
-        registry.getStrategy(999);
+        registry.getStrategy(userA, 999);
     }
 
-    function testIsStrategyActiveReflectsState() public {
-        vm.prank(owner);
+    function testGetMyStrategyWorks() public {
+        vm.prank(userA);
         uint256 id = registry.registerStrategy(
             adapter,
-            dexRouter,
+            router,
             token0,
             token1,
             "n",
             "d"
         );
 
-        assertTrue(
-            registry.isStrategyActive(id),
-            "New strategy should be active"
+        vm.prank(userA);
+        StrategyRegistry.Strategy memory s = registry.getMyStrategy(id);
+        assertEq(s.adapter, adapter);
+        assertTrue(s.active);
+    }
+
+    function testIsStrategyActiveReflectsState() public {
+        vm.prank(userA);
+        uint256 id = registry.registerStrategy(
+            adapter,
+            router,
+            token0,
+            token1,
+            "n",
+            "d"
         );
 
-        vm.prank(owner);
+        assertTrue(registry.isStrategyActive(userA, id));
+
+        vm.prank(userA);
         registry.setStrategyActive(id, false);
-        assertFalse(
-            registry.isStrategyActive(id),
-            "Strategy should be inactive after deactivation"
-        );
+        assertFalse(registry.isStrategyActive(userA, id));
 
-        vm.prank(owner);
+        vm.prank(userA);
         registry.setStrategyActive(id, true);
-        assertTrue(
-            registry.isStrategyActive(id),
-            "Strategy should be active again after reactivation"
-        );
+        assertTrue(registry.isStrategyActive(userA, id));
     }
 
     // -------------------------------------------------------------------------
@@ -171,120 +285,88 @@ contract StrategyRegistryTest is Test {
     // -------------------------------------------------------------------------
 
     function testUpdateStrategySuccess() public {
-        vm.prank(owner);
+        vm.prank(userA);
         uint256 id = registry.registerStrategy(
             adapter,
-            dexRouter,
+            router,
             token0,
             token1,
             "name",
             "desc"
         );
 
-        address newAdapter = address(0xA0FFEE);
-        address newRouter = address(0xC0DFEE);
-        address newToken0 = address(0xC0FFEE);
-        address newToken1 = address(0xDEAD);
-        string memory newName = "Updated strategy";
-        string memory newDesc = "Updated description";
-
-        vm.prank(owner);
+        vm.prank(userA);
         registry.updateStrategy(
             id,
-            newAdapter,
-            newRouter,
-            newToken0,
-            newToken1,
-            newName,
-            newDesc
+            adapter2,
+            router2,
+            token0,
+            token1,
+            "Updated",
+            "Updated desc"
         );
 
-        StrategyRegistry.Strategy memory s = registry.getStrategy(id);
-        assertEq(s.adapter, newAdapter, "Adapter should be updated");
-        assertEq(s.dexRouter, newRouter, "Router should be updated");
-        assertEq(s.token0, newToken0, "Token0 should be updated");
-        assertEq(s.token1, newToken1, "Token1 should be updated");
-        assertEq(
-            keccak256(bytes(s.name)),
-            keccak256(bytes(newName)),
-            "Name should be updated"
-        );
+        StrategyRegistry.Strategy memory s = registry.getStrategy(userA, id);
+        assertEq(s.adapter, adapter2);
+        assertEq(s.dexRouter, router2);
+        assertEq(keccak256(bytes(s.name)), keccak256(bytes("Updated")));
         assertEq(
             keccak256(bytes(s.description)),
-            keccak256(bytes(newDesc)),
-            "Description should be updated"
+            keccak256(bytes("Updated desc"))
         );
-        assertTrue(s.active, "Active flag should be preserved");
+        assertTrue(s.active, "active flag must be preserved");
     }
 
     function testUpdateStrategyUnknownReverts() public {
-        vm.prank(owner);
+        vm.prank(userA);
         vm.expectRevert("StrategyRegistry: unknown strategy");
-        registry.updateStrategy(
-            999,
-            adapter,
-            dexRouter,
-            token0,
-            token1,
-            "x",
-            "y"
-        );
+        registry.updateStrategy(999, adapter, router, token0, token1, "x", "y");
     }
 
-    function testUpdateStrategyRequiresOwner() public {
-        vm.prank(owner);
+    function testUpdateStrategyRequiresAllowlist() public {
+        vm.prank(userA);
         uint256 id = registry.registerStrategy(
             adapter,
-            dexRouter,
+            router,
             token0,
             token1,
             "name",
             "desc"
         );
 
-        vm.prank(other);
-        vm.expectRevert(
-            abi.encodeWithSelector(
-                Ownable.OwnableUnauthorizedAccount.selector,
-                other
-            )
-        );
-        registry.updateStrategy(
-            id,
-            adapter,
-            dexRouter,
-            token0,
-            token1,
-            "x",
-            "y"
-        );
+        vm.prank(protocolOwner);
+        registry.setAdapterAllowed(adapter2, false);
+
+        vm.prank(userA);
+        vm.expectRevert("StrategyRegistry: adapter not allowed");
+        registry.updateStrategy(id, adapter2, router, token0, token1, "x", "y");
     }
 
     function testUpdateStrategyZeroAddressesRevert() public {
-        vm.prank(owner);
+        vm.prank(userA);
         uint256 id = registry.registerStrategy(
             adapter,
-            dexRouter,
+            router,
             token0,
             token1,
             "name",
             "desc"
         );
 
-        vm.startPrank(owner);
+        vm.startPrank(userA);
 
         vm.expectRevert("StrategyRegistry: adapter=0");
         registry.updateStrategy(
             id,
             address(0),
-            dexRouter,
+            router,
             token0,
             token1,
             "x",
             "y"
         );
 
-        vm.expectRevert("StrategyRegistry: dexRouter=0");
+        vm.expectRevert("StrategyRegistry: router=0");
         registry.updateStrategy(
             id,
             adapter,
@@ -299,7 +381,7 @@ contract StrategyRegistryTest is Test {
         registry.updateStrategy(
             id,
             adapter,
-            dexRouter,
+            router,
             address(0),
             token1,
             "x",
@@ -310,7 +392,7 @@ contract StrategyRegistryTest is Test {
         registry.updateStrategy(
             id,
             adapter,
-            dexRouter,
+            router,
             token0,
             address(0),
             "x",
@@ -320,34 +402,29 @@ contract StrategyRegistryTest is Test {
         vm.stopPrank();
     }
 
+    function testUpdateStrategyIdenticalTokensRevert() public {
+        vm.prank(userA);
+        uint256 id = registry.registerStrategy(
+            adapter,
+            router,
+            token0,
+            token1,
+            "name",
+            "desc"
+        );
+
+        vm.prank(userA);
+        vm.expectRevert("StrategyRegistry: identical tokens");
+        registry.updateStrategy(id, adapter, router, token0, token0, "x", "y");
+    }
+
     // -------------------------------------------------------------------------
     // setStrategyActive
     // -------------------------------------------------------------------------
 
     function testSetStrategyActiveUnknownReverts() public {
-        vm.prank(owner);
+        vm.prank(userA);
         vm.expectRevert("StrategyRegistry: unknown strategy");
         registry.setStrategyActive(999, true);
-    }
-
-    function testSetStrategyActiveRequiresOwner() public {
-        vm.prank(owner);
-        uint256 id = registry.registerStrategy(
-            adapter,
-            dexRouter,
-            token0,
-            token1,
-            "n",
-            "d"
-        );
-
-        vm.prank(other);
-        vm.expectRevert(
-            abi.encodeWithSelector(
-                Ownable.OwnableUnauthorizedAccount.selector,
-                other
-            )
-        );
-        registry.setStrategyActive(id, false);
     }
 }
