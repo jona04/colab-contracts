@@ -2,7 +2,7 @@
 pragma solidity ^0.8.24;
 
 import "forge-std/Script.sol";
-import {ISingleUserVault} from "../src/interfaces/ISingleUserVault.sol";
+import {ISingleUserVault} from "../../src/interfaces/ISingleUserVault.sol";
 
 contract RebalanceCaps is Script {
     function run() external {

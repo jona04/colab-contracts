@@ -2,7 +2,7 @@
 pragma solidity ^0.8.24;
 
 import "forge-std/Script.sol";
-import { SingleUserVault } from "../src/core/SingleUserVault.sol";
+import {SingleUserVault} from "../../src/core/SingleUserVault.sol";
 
 /// @notice Deploy script for SingleUserVault.
 /// @dev Uses PRIVATE_KEY and RPC from environment.

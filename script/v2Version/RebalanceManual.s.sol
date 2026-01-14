@@ -3,7 +3,7 @@ pragma solidity ^0.8.24;
 
 import "forge-std/console2.sol";
 import "forge-std/Script.sol";
-import { ISingleUserVault } from "../src/interfaces/ISingleUserVault.sol";
+import {ISingleUserVault} from "../../src/interfaces/ISingleUserVault.sol";
 
 /// @notice Performs a manual rebalance on the vault.
 /// @dev Expects env vars:

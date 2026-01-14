@@ -2,7 +2,7 @@
 pragma solidity ^0.8.24;
 
 import "forge-std/Script.sol";
-import {ISingleUserVault} from "../src/interfaces/ISingleUserVault.sol";
+import {ISingleUserVault} from "../../src/interfaces/ISingleUserVault.sol";
 
 contract VaultCollect is Script {
     /// @notice Reads VAULT_ADDRESS from env and calls collectFees().
